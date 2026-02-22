@@ -28,84 +28,94 @@ jobs:
 
       # -- Build all images --
 
-      - name: Build API image
-        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+      - name: Build add image
+        uses: kindling-sh/kindling/.github/actions/kindling-build@main
+        with:
+          name: add
+          context: ${{ github.workspace }}/services/add
+          image: "${{ env.REGISTRY }}/add:${{ env.TAG }}"
+
+      - name: Build multiply image
+        uses: kindling-sh/kindling/.github/actions/kindling-build@main
+        with:
+          name: multiply
+          context: ${{ github.workspace }}/services/multiply
+          image: "${{ env.REGISTRY }}/multiply:${{ env.TAG }}"
+
+      - name: Build api image
+        uses: kindling-sh/kindling/.github/actions/kindling-build@main
         with:
           name: api
           context: ${{ github.workspace }}
           dockerfile: api/Dockerfile
           image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
 
-      - name: Build add service image
-        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
-        with:
-          name: add-service
-          context: ${{ github.workspace }}/services/add
-          image: "${{ env.REGISTRY }}/add-service:${{ env.TAG }}"
-
-      - name: Build multiply service image
-        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
-        with:
-          name: multiply-service
-          context: ${{ github.workspace }}/services/multiply
-          image: "${{ env.REGISTRY }}/multiply-service:${{ env.TAG }}"
-
       # -- Deploy in dependency order --
 
-      - name: Deploy add service
-        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+      - name: Deploy add worker
+        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
         with:
-          name: "${{ github.actor }}-add-service"
-          image: "${{ env.REGISTRY }}/add-service:${{ env.TAG }}"
+          name: "${{ github.actor }}-add"
+          image: "${{ env.REGISTRY }}/add:${{ env.TAG }}"
           port: "8000"
-          ingress-host: "${{ github.actor }}-add-service.localhost"
-          dependencies: |
-            - type: rabbitmq
-            - type: redis
+          ingress-host: "${{ github.actor }}-add.localhost"
           env: |
             - name: CELERY_BROKER_URL
               value: "$(AMQP_URL)"
             - name: CELERY_RESULT_BACKEND
               value: "$(REDIS_URL)"
-
-      - name: Deploy multiply service
-        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
-        with:
-          name: "${{ github.actor }}-multiply-service"
-          image: "${{ env.REGISTRY }}/multiply-service:${{ env.TAG }}"
-          port: "8000"
-          ingress-host: "${{ github.actor }}-multiply-service.localhost"
           dependencies: |
             - type: rabbitmq
             - type: redis
+          labels: |
+            app.kubernetes.io/part-of: opentelemetryPOC
+            app.kubernetes.io/component: add
+            apps.example.com/github-username: ${{ github.actor }}
+
+      - name: Deploy multiply worker
+        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
+        with:
+          name: "${{ github.actor }}-multiply"
+          image: "${{ env.REGISTRY }}/multiply:${{ env.TAG }}"
+          port: "8000"
+          ingress-host: "${{ github.actor }}-multiply.localhost"
           env: |
             - name: CELERY_BROKER_URL
               value: "$(AMQP_URL)"
             - name: CELERY_RESULT_BACKEND
               value: "$(REDIS_URL)"
+          dependencies: |
+            - type: rabbitmq
+            - type: redis
+          labels: |
+            app.kubernetes.io/part-of: opentelemetryPOC
+            app.kubernetes.io/component: multiply
+            apps.example.com/github-username: ${{ github.actor }}
 
-      - name: Deploy API
-        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+      - name: Deploy api
+        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
         with:
           name: "${{ github.actor }}-api"
           image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
           port: "8000"
           ingress-host: "${{ github.actor }}-api.localhost"
-          health-check-path: "/"
-          dependencies: |
-            - type: rabbitmq
-            - type: redis
           env: |
             - name: CELERY_BROKER_URL
               value: "$(AMQP_URL)"
             - name: CELERY_RESULT_BACKEND
               value: "$(REDIS_URL)"
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://otel-collector:4317"
+          dependencies: |
+            - type: rabbitmq
+            - type: redis
+          labels: |
+            app.kubernetes.io/part-of: opentelemetryPOC
+            app.kubernetes.io/component: api
+            apps.example.com/github-username: ${{ github.actor }}
 
       - name: Summary
         run: |
           echo "🎉 Deploy complete!"
-          echo "🌐 API: http://${{ github.actor }}-api.localhost"
-          echo "🌐 Add Service: http://${{ github.actor }}-add-service.localhost"
-          echo "🌐 Multiply Service: http://${{ github.actor }}-multiply-service.localhost"
+          echo "🌐 API:       http://${{ github.actor }}-api.localhost"
+          echo "🐇 RabbitMQ & 🔄 Redis injected automatically"
+          echo "👷 Add worker:      http://${{ github.actor }}-add.localhost"
+          echo "👷 Multiply worker: http://${{ github.actor }}-multiply.localhost"
