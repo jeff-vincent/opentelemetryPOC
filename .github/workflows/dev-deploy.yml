@@ -1,0 +1,111 @@
+name: Dev Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: "registry:5000"
+  TAG: "${{ github.actor }}-${{ github.sha }}"
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, "${{ github.actor }}"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clean builds directory
+        shell: bash
+        run: |
+          rm -f /builds/*.done /builds/*.request /builds/*.processing \
+                /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
+                /builds/*.apply-exitcode /builds/*.exitcode \
+                /builds/*.log /builds/*.dest /builds/*.tar.gz \
+                /builds/*.yaml /builds/*.sh
+
+      # -- Build all images --
+
+      - name: Build API image
+        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+        with:
+          name: api
+          context: ${{ github.workspace }}
+          dockerfile: api/Dockerfile
+          image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
+
+      - name: Build add service image
+        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+        with:
+          name: add-service
+          context: ${{ github.workspace }}/services/add
+          image: "${{ env.REGISTRY }}/add-service:${{ env.TAG }}"
+
+      - name: Build multiply service image
+        uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+        with:
+          name: multiply-service
+          context: ${{ github.workspace }}/services/multiply
+          image: "${{ env.REGISTRY }}/multiply-service:${{ env.TAG }}"
+
+      # -- Deploy in dependency order --
+
+      - name: Deploy add service
+        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+        with:
+          name: "${{ github.actor }}-add-service"
+          image: "${{ env.REGISTRY }}/add-service:${{ env.TAG }}"
+          port: "8000"
+          ingress-host: "${{ github.actor }}-add-service.localhost"
+          dependencies: |
+            - type: rabbitmq
+            - type: redis
+          env: |
+            - name: CELERY_BROKER_URL
+              value: "$(AMQP_URL)"
+            - name: CELERY_RESULT_BACKEND
+              value: "$(REDIS_URL)"
+
+      - name: Deploy multiply service
+        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+        with:
+          name: "${{ github.actor }}-multiply-service"
+          image: "${{ env.REGISTRY }}/multiply-service:${{ env.TAG }}"
+          port: "8000"
+          ingress-host: "${{ github.actor }}-multiply-service.localhost"
+          dependencies: |
+            - type: rabbitmq
+            - type: redis
+          env: |
+            - name: CELERY_BROKER_URL
+              value: "$(AMQP_URL)"
+            - name: CELERY_RESULT_BACKEND
+              value: "$(REDIS_URL)"
+
+      - name: Deploy API
+        uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+        with:
+          name: "${{ github.actor }}-api"
+          image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
+          port: "8000"
+          ingress-host: "${{ github.actor }}-api.localhost"
+          health-check-path: "/"
+          dependencies: |
+            - type: rabbitmq
+            - type: redis
+          env: |
+            - name: CELERY_BROKER_URL
+              value: "$(AMQP_URL)"
+            - name: CELERY_RESULT_BACKEND
+              value: "$(REDIS_URL)"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+
+      - name: Summary
+        run: |
+          echo "🎉 Deploy complete!"
+          echo "🌐 API: http://${{ github.actor }}-api.localhost"
+          echo "🌐 Add Service: http://${{ github.actor }}-add-service.localhost"
+          echo "🌐 Multiply Service: http://${{ github.actor }}-multiply-service.localhost"
